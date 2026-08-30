@@ -123,13 +123,13 @@
 | AI在庫判定 | Anthropic API | **Google Gemini API**（`gemini-1.5-flash`） | ユーザー判断により、無料枠のあるGemini APIを採用。`GEMINI_API_KEY`未設定時は在庫数のみで判定するモックロジックにフォールバックするため、キーがなくても動作確認可能。将来Anthropic APIへの差し替えも、`server/src/services/stockCheck.js` の呼び出し先を変更するだけで対応できる構成にしている。 |
 | AR | Unity（AR Foundation） | **WebXR Device API + three.js**（ブラウザ内蔵AR） | AR FoundationはネイティブアプリのビルドフレームワークでありWebアプリに直接組み込めないため、要件書8章の課題を踏まえてWebXRを採用。WebXR非対応端末（iOS Safari等）では、カメラ映像＋端末コンパスによる簡易AR表示にフォールバックする。 |
 | フロントエンド | ― | React（Vite） | 消費者用・管理者用を1つのReactアプリ内でルーティング分割（`/admin/*`が管理者側）。 |
-| バックエンド | ― | Node.js（Express）+ **Postgres（Neon, Vercel連携）** | サーバーレス環境でも永続化されるよう、当初のSQLiteから移行（10.2節参照）。ローカル開発も本番も同じNeon DBを共有する。 |
+| バックエンド | ― | Node.js（Express）+ **Firestore（Firebase）** | サーバーレス環境でも永続化されるよう、SQLite→Postgres（Neon）を経てFirestoreに移行（10.2節参照）。ユーザーの既存Firebaseプロジェクトを使用。ローカル開発も本番も同じFirestoreを共有する。 |
 | 認証 | ― | JWT（bcryptによるパスワードハッシュ） | 管理者アカウントは企業単位（`company_id`）に紐づき、他社データは操作不可。 |
 
 ### 9.2 ディレクトリ構成
 
 ```
-server/   … Express API サーバー（Postgres/Neonに接続）
+server/   … Express API サーバー（Firestoreに接続）
 web/      … React フロントエンド（消費者用・管理者用を統合、Vite）
 api/      … Vercel Serverless Function（server/のExpressアプリをそのままハンドラーとしてexport）
 ```
@@ -139,9 +139,9 @@ api/      … Vercel Serverless Function（server/のExpressアプリをその�
 ```bash
 # バックエンド
 cd server
-cp .env.example .env   # DATABASE_URL（Neon接続文字列）、必要ならGEMINI_API_KEYを設定
+cp .env.example .env   # FIREBASE_PROJECT_ID / FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY、必要ならGEMINI_API_KEYを設定
 npm install
-npm run seed            # テーブル作成＋サンプルデータ投入（サンプルスーパー／駅前店(AR対応)・郊外店(AR未対応)、admin@example.com / password123）
+npm run seed            # サンプルデータ投入（サンプルスーパー／駅前店(AR対応)・郊外店(AR未対応)、admin@example.com / password123）
 npm start                # http://localhost:4000
 
 # フロントエンド（別ターミナル）
@@ -204,18 +204,17 @@ localhost以外からも（スマートフォン実機を含め）動作確認�
 
 ### 10.2 データ永続化
 
-当初はSQLite（better-sqlite3）をVercel Serverless Functionsの一時領域（`/tmp`）に置いていたが、**`/tmp`はインスタンスごと・コールドスタートごとに独立してリセットされるため、新規登録や支店追加などの書き込みが別インスタンスから見えなくなる**という不具合が発生した（ログイン失敗、支店一覧の表示欠落など）。
+当初はSQLite（better-sqlite3）をVercel Serverless Functionsの一時領域（`/tmp`）に置いていたが、**`/tmp`はインスタンスごと・コールドスタートごとに独立してリセットされるため、新規登録や支店追加などの書き込みが別インスタンスから見えなくなる**という不具合が発生した（ログイン失敗、支店一覧の表示欠落など）。これを解消するため一度Postgres（Neon）に移行し、その後ユーザーの希望により**Firestore（Firebase、既存プロジェクト`syouhinnkennsakuannnai`）に移行した**（`server/src/db.js`）。ローカル開発・Vercel本番のどちらも同じFirestoreを共有するため、管理者アプリでの新規登録・支店追加・商品登録・AR実測登録は、環境やインスタンスを問わず常に正しく永続化される。
 
-この問題を解消するため、**Vercelマーケットプレイス経由でNeon（サーバーレスPostgres）を導入し、DBをPostgresに移行した**（`server/src/db.js`）。ローカル開発・Vercel本番のどちらも同じNeon DBを共有するため、管理者アプリでの新規登録・支店追加・商品登録・AR実測登録は、環境やインスタインスタンスを問わず常に正しく永続化される。
-
-- 接続文字列は`DATABASE_URL`環境変数（Vercel側はNeon連携により自動設定、ローカルは`server/.env`に同じ値を設定）。
-- Neonは既定で約5分アイドルするとコンピュートがスケールtoゼロ（サスペンド）する。復帰後の初回クエリはコールドスタートで若干遅くなる（実測で1〜2秒程度）ため、Vercel Function側の`maxDuration`を30秒に設定し、`pg.Pool`の`connectionTimeoutMillis`も余裕を持たせている（`vercel.json`, `server/src/db.js`）。
+- FirestoreはNoSQLドキュメントDBのため、SQLのJOINに相当する処理（検索ランキング集計など）はアプリケーション側で行っている（`server/src/routes/ranking.js`）。
+- Firestoreは「等価条件＋別フィールドの範囲条件・並び替え」の組み合わせに複合インデックスの作成が必要になる場合があるため、本実装ではあえて単純な等価フィルタのみでまとめて取得し、絞り込み・集計・並び替えはすべてアプリ側（Node.js）で行う設計にして、複合インデックス作成（Firebaseコンソールでの手動操作が必要）を一切不要にしている。
+- 認証情報はFirebase Admin SDKのサービスアカウント鍵から`FIREBASE_PROJECT_ID`・`FIREBASE_CLIENT_EMAIL`・`FIREBASE_PRIVATE_KEY`の3つの環境変数を抽出して使用（サービスアカウントのJSONファイル自体はコミットしない。`.gitignore`参照）。
 
 ### 10.3 環境変数
 
 Vercelプロジェクトに以下を設定済み／設定可能：
 
-- `DATABASE_URL`：Neon統合（`vercel integration add neon`）により自動設定済み。
+- `FIREBASE_PROJECT_ID` / `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY`：Firebase Admin SDKのサービスアカウント鍵から設定済み。
 - `JWT_SECRET`：ランダム値を生成しProduction/Preview環境に設定済み。
 - `GEMINI_API_KEY`：未設定（在庫判定はモックロジックで動作）。実際にGemini APIで判定したい場合は、Vercelダッシュボードまたは`vercel env add GEMINI_API_KEY`でキーを追加後、再デプロイする。
 

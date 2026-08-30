@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import { pool } from '../db.js';
+import { companiesCol } from '../db.js';
 
 export async function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
@@ -17,8 +17,8 @@ export async function requireAuth(req, res, next) {
 
   try {
     // トークン自体は有効でも、紐づく会社アカウントが（DBリセット等で）既に存在しない場合がある。
-    const { rows } = await pool.query('SELECT id FROM companies WHERE id = $1', [payload.companyId]);
-    if (rows.length === 0) {
+    const doc = await companiesCol.doc(payload.companyId).get();
+    if (!doc.exists) {
       return res.status(401).json({ error: 'アカウント情報が見つかりません。再度ログインしてください。' });
     }
   } catch (err) {

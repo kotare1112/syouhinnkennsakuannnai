@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import { pool, initDb } from './db.js';
+import { companiesCol } from './db.js';
 import { seed } from './seed.js';
 import { authRouter } from './routes/auth.js';
 import { companiesRouter } from './routes/companies.js';
@@ -10,11 +10,9 @@ import { productsRouter } from './routes/products.js';
 import { rankingRouter } from './routes/ranking.js';
 import { adminRouter } from './routes/admin.js';
 
-// テーブルが無ければ作成し、データが空であれば初回のみサンプルデータを投入する。
-// Postgres(Neon)は常時永続化されるため、ローカル・Vercel問わずこの起動時チェックだけで済む。
-await initDb();
-const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM companies');
-if (rows[0].count === 0) await seed();
+// データが空であれば初回のみサンプルデータを投入する（Firestoreは常時永続化されるため、この起動時チェックだけで済む）。
+const existing = await companiesCol.limit(1).get();
+if (existing.empty) await seed();
 
 const app = express();
 app.use(cors());
@@ -34,7 +32,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'サーバーエラーが発生しました。' });
 });
 
-// Vercel Serverless Functionsではapp.listen()せず、Expressアプリをそのままハンドラーとしてexportする（api/[...slug].js参照）。
+// Vercel Serverless Functionsではapp.listen()せず、Expressアプリをそのままハンドラーとしてexportする（api/index.js参照）。
 if (!process.env.VERCEL) {
   const port = process.env.PORT || 4000;
   app.listen(port, () => {

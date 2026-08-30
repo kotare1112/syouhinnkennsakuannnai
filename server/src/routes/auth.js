@@ -2,7 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuid } from 'uuid';
-import { pool } from '../db.js';
+import { companiesCol, usersCol } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 
 export const authRouter = Router();
@@ -16,8 +16,8 @@ authRouter.post(
       return res.status(400).json({ error: 'email, password, companyName は必須です。' });
     }
 
-    const { rows: existingRows } = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-    if (existingRows.length > 0) {
+    const existing = await usersCol.where('email', '==', email).limit(1).get();
+    if (!existing.empty) {
       return res.status(409).json({ error: 'このメールアドレスは既に登録されています。' });
     }
 
@@ -25,11 +25,8 @@ authRouter.post(
     const userId = uuid();
     const passwordHash = bcrypt.hashSync(password, 10);
 
-    await pool.query('INSERT INTO companies (id, name) VALUES ($1, $2)', [companyId, companyName]);
-    await pool.query(
-      'INSERT INTO users (id, email, password_hash, name, company_id) VALUES ($1, $2, $3, $4, $5)',
-      [userId, email, passwordHash, name || null, companyId]
-    );
+    await companiesCol.doc(companyId).set({ name: companyName });
+    await usersCol.doc(userId).set({ email, passwordHash, name: name || null, companyId });
 
     const token = issueToken({ id: userId, email, companyId });
     res.status(201).json({ token, user: { id: userId, email, name, companyId } });
@@ -40,15 +37,16 @@ authRouter.post(
   '/login',
   asyncHandler(async (req, res) => {
     const { email, password } = req.body || {};
-    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    const user = rows[0];
-    if (!user || !bcrypt.compareSync(password || '', user.password_hash)) {
+    const snapshot = await usersCol.where('email', '==', email).limit(1).get();
+    const doc = snapshot.docs[0];
+    const user = doc?.data();
+    if (!user || !bcrypt.compareSync(password || '', user.passwordHash)) {
       return res.status(401).json({ error: 'メールアドレスまたはパスワードが正しくありません。' });
     }
-    const token = issueToken({ id: user.id, email: user.email, companyId: user.company_id });
+    const token = issueToken({ id: doc.id, email: user.email, companyId: user.companyId });
     res.json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, companyId: user.company_id },
+      user: { id: doc.id, email: user.email, name: user.name, companyId: user.companyId },
     });
   })
 );

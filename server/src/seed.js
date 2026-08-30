@@ -1,9 +1,9 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
-import { pool } from './db.js';
+import { companiesCol, branchesCol, productsCol, usersCol, searchLogsCol, deleteAllDocs } from './db.js';
 
 // 固定IDにしているのは、以前SQLite+Vercelサーバーレス環境でランダムUUIDを使っていた際に、
-// インスタンスごとに異なるIDでシードされて整合性が壊れた反省から。Postgres移行後は必須ではないが、
+// インスタンスごとに異なるIDでシードされて整合性が壊れた反省から。Firestore移行後も
 // サンプルデータの参照しやすさのためそのまま維持している。
 const IDS = {
   company: '00000000-0000-4000-8000-000000000001',
@@ -27,27 +27,29 @@ function productIds(branchKey) {
 }
 
 export async function seed() {
-  await pool.query('DELETE FROM search_logs');
-  await pool.query('DELETE FROM products');
-  await pool.query('DELETE FROM users');
-  await pool.query('DELETE FROM branches');
-  await pool.query('DELETE FROM companies');
+  await deleteAllDocs(searchLogsCol);
+  await deleteAllDocs(productsCol);
+  await deleteAllDocs(usersCol);
+  await deleteAllDocs(branchesCol);
+  await deleteAllDocs(companiesCol);
 
-  await pool.query('INSERT INTO companies (id, name) VALUES ($1, $2)', [IDS.company, 'サンプルスーパー']);
+  await companiesCol.doc(IDS.company).set({ name: 'サンプルスーパー' });
 
-  await pool.query(
-    `INSERT INTO branches
-     (id, company_id, name, ar_enabled, entry_qr_token, exit_qr_token)
-     VALUES ($1, $2, $3, TRUE, $4, $5)`,
-    [IDS.branchA, IDS.company, '駅前店（AR対応）', IDS.branchAEntryQr, IDS.branchAExitQr]
-  );
+  await branchesCol.doc(IDS.branchA).set({
+    companyId: IDS.company,
+    name: '駅前店（AR対応）',
+    arEnabled: true,
+    entryQrToken: IDS.branchAEntryQr,
+    exitQrToken: IDS.branchAExitQr,
+  });
 
-  await pool.query(
-    `INSERT INTO branches
-     (id, company_id, name, ar_enabled, entry_qr_token, exit_qr_token)
-     VALUES ($1, $2, $3, FALSE, $4, $5)`,
-    [IDS.branchB, IDS.company, '郊外店（AR未対応）', IDS.branchBEntryQr, IDS.branchBExitQr]
-  );
+  await branchesCol.doc(IDS.branchB).set({
+    companyId: IDS.company,
+    name: '郊外店（AR未対応）',
+    arEnabled: false,
+    entryQrToken: IDS.branchBEntryQr,
+    exitQrToken: IDS.branchBExitQr,
+  });
 
   // bearingDeg/distanceMは、実店舗で管理者がAR登録した想定のサンプル値。
   const products = [
@@ -59,11 +61,15 @@ export async function seed() {
   ];
 
   const insertProduct = (id, branchId, p) =>
-    pool.query(
-      `INSERT INTO products (id, branch_id, name, category, price, stock_qty, bearing_deg, distance_m)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [id, branchId, p.name, p.category, p.price, p.stockQty, p.bearingDeg, p.distanceM]
-    );
+    productsCol.doc(id).set({
+      branchId,
+      name: p.name,
+      category: p.category,
+      price: p.price,
+      stockQty: p.stockQty,
+      bearingDeg: p.bearingDeg,
+      distanceM: p.distanceM,
+    });
 
   const branchAProductIds = productIds('1');
   const branchBProductIds = productIds('2');
@@ -73,18 +79,18 @@ export async function seed() {
   }
 
   const adminEmail = 'admin@example.com';
-  await pool.query(
-    'INSERT INTO users (id, email, password_hash, name, company_id) VALUES ($1, $2, $3, $4, $5)',
-    [IDS.adminUser, adminEmail, bcrypt.hashSync('password123', 10), '管理者', IDS.company]
-  );
+  await usersCol.doc(IDS.adminUser).set({
+    email: adminEmail,
+    passwordHash: bcrypt.hashSync('password123', 10),
+    name: '管理者',
+    companyId: IDS.company,
+  });
 
   return { companyId: IDS.company, branchAId: IDS.branchA, branchBId: IDS.branchB, adminEmail };
 }
 
 // CLIから直接実行された場合（`npm run seed`）のみ実行する。
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { initDb } = await import('./db.js');
-  await initDb();
   const result = await seed();
   console.log('Seed complete.');
   console.log(`admin login: ${result.adminEmail} / password123`);
