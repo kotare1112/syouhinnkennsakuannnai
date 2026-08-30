@@ -6,3 +6,5 @@ server/data/*.db
 server/data/*.db-*
 .vercel
 .env*
+server/firebase-servise-account.json
+server/firebase-service-account.json
