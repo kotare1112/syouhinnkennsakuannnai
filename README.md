@@ -124,7 +124,7 @@
 | AR | Unity（AR Foundation） | **WebXR Device API + three.js**（ブラウザ内蔵AR） | AR FoundationはネイティブアプリのビルドフレームワークでありWebアプリに直接組み込めないため、要件書8章の課題を踏まえてWebXRを採用。WebXR非対応端末（iOS Safari等）では、カメラ映像＋端末コンパスによる簡易AR表示にフォールバックする。 |
 | フロントエンド | ― | React（Vite） | 消費者用・管理者用を1つのReactアプリ内でルーティング分割（`/admin/*`が管理者側）。 |
 | バックエンド | ― | Node.js（Express）+ **Firestore（Firebase）** | サーバーレス環境でも永続化されるよう、SQLite→Postgres（Neon）を経てFirestoreに移行（10.2節参照）。ユーザーの既存Firebaseプロジェクトを使用。ローカル開発も本番も同じFirestoreを共有する。 |
-| 認証 | ― | JWT（bcryptによるパスワードハッシュ） | 管理者アカウントは企業単位（`company_id`）に紐づき、他社データは操作不可。 |
+| 認証 | ― | **Firebase Authentication**（メール/パスワード） | 当初は自前のJWT＋bcryptだったが、ユーザーの希望によりFirebase Authenticationに移行（9.4.2節参照）。パスワードの保管・検証はFirebase側が行い、管理者アカウントは企業単位（`companyId`、Firestore）に紐づく。 |
 
 ### 9.2 ディレクトリ構成
 
@@ -181,6 +181,17 @@ npm run dev              # https://localhost:5173 （/api を :4000 にプロキ
 
 これにより、消費者向けAR案内（3.1の5）で使う方位・距離は、マップ上の仮想座標ではなく実際に計測した値になる。WebXR非対応端末（PCなど）ではこの登録機能自体が使えない旨のメッセージを表示する（実店舗を歩く必要がある性質上、対応スマートフォンでの操作を前提とする）。
 
+### 9.4.2 管理者ログインをFirebase Authenticationに変更
+
+当初は自前でJWT発行＋bcryptによるパスワードハッシュを実装していたが、ユーザーの希望により**Firebase Authentication**（既存のFirebaseプロジェクト`syouhinnkennsakuannnai`）に置き換えた。
+
+- **新規登録**：`POST /api/auth/register` がサーバー側でFirebase Admin SDKの`auth.createUser()`を呼び、Firebase Authenticationにユーザーを作成する。同時にFirestoreへ企業（`companies`）・ユーザー付随情報（`users/{uid}`、companyIdのみ）を保存する。レスポンスにカスタムトークンを含め、フロントは`signInWithCustomToken()`でログイン状態にする。
+- **ログイン**：パスワードの検証はFirebase側でしかできないため、フロントエンドがFirebase Client SDKの`signInWithEmailAndPassword()`を直接呼び出す（バックエンドを経由しない）。取得したIDトークンを以降のAPIリクエストの`Authorization: Bearer`ヘッダーに使う。
+- **サーバー側の認証**：`server/src/middleware/requireAuth.js`が`auth.verifyIdToken()`でIDトークンを検証し、Firestoreの`users/{uid}`からcompanyIdを取得する。
+- **セッション永続化**：Firebase Client SDKが認証状態をブラウザに保持するため、ページ再読み込み後も自動的に復元される（`onIdTokenChanged`で監視）。
+
+デプロイ時のハマりどころ：`firebase-admin`が内部で使う`jwks-rsa@4.x`は`jose@6`（ESM専用）に依存しており、Vercelの関数実行環境で`ERR_REQUIRE_ESM`エラーが発生した。`package.json`の`overrides`で`jwks-rsa`を`3.2.2`（CommonJS対応の`jose@4`系を使う最終バージョン）に固定して解消した。
+
 ### 9.5 プロトタイプ段階での簡略化・既知の制約
 
 - **屋内測位（歩行中の自己位置）は未実装**：AR案内中の残り距離はWebXRの自己位置トラッキングでリアルタイム更新されるが、通路や什器を避けた経路探索（ルーティング）はしておらず、常に直線距離・直線方位で案内する。
@@ -214,9 +225,10 @@ localhost以外からも（スマートフォン実機を含め）動作確認�
 
 Vercelプロジェクトに以下を設定済み／設定可能：
 
-- `FIREBASE_PROJECT_ID` / `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY`：Firebase Admin SDKのサービスアカウント鍵から設定済み。
-- `JWT_SECRET`：ランダム値を生成しProduction/Preview環境に設定済み。
+- `FIREBASE_PROJECT_ID` / `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY`：Firebase Admin SDKのサービスアカウント鍵から設定済み（サーバー側の認証・Firestoreアクセス用）。
 - `GEMINI_API_KEY`：未設定（在庫判定はモックロジックで動作）。実際にGemini APIで判定したい場合は、Vercelダッシュボードまたは`vercel env add GEMINI_API_KEY`でキーを追加後、再デプロイする。
+
+なお、フロントエンド（`web/src/firebase.js`）にはFirebaseの**ウェブアプリ設定**（apiKey等）をハードコードしている。これはFirebase Authenticationの許可済みドメイン設定やFirestoreセキュリティルールで保護される前提の公開情報であり、秘密鍵（サービスアカウント）とは異なり環境変数化やコミット除外の必要はない。
 
 ### 10.4 再デプロイ方法
 

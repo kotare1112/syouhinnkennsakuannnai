@@ -1,6 +1,14 @@
 import 'dotenv/config';
-import bcrypt from 'bcryptjs';
-import { companiesCol, branchesCol, productsCol, usersCol, searchLogsCol, deleteAllDocs } from './db.js';
+import { auth, companiesCol, branchesCol, productsCol, usersCol, searchLogsCol, deleteAllDocs } from './db.js';
+
+// Firebase Authenticationに登録された全ユーザーを削除する（シード時のリセット用）。
+// Firestoreの削除だけではAuthenticationのアカウントは残ってしまうため、再シード時の
+// email-already-exists衝突を避けるためにも両方をクリアする。
+async function deleteAllAuthUsers() {
+  const list = await auth.listUsers(1000);
+  if (list.users.length === 0) return;
+  await auth.deleteUsers(list.users.map((u) => u.uid));
+}
 
 // 固定IDにしているのは、以前SQLite+Vercelサーバーレス環境でランダムUUIDを使っていた際に、
 // インスタンスごとに異なるIDでシードされて整合性が壊れた反省から。Firestore移行後も
@@ -27,6 +35,7 @@ function productIds(branchKey) {
 }
 
 export async function seed() {
+  await deleteAllAuthUsers();
   await deleteAllDocs(searchLogsCol);
   await deleteAllDocs(productsCol);
   await deleteAllDocs(usersCol);
@@ -79,14 +88,20 @@ export async function seed() {
   }
 
   const adminEmail = 'admin@example.com';
-  await usersCol.doc(IDS.adminUser).set({
+  const adminPassword = 'password123';
+  const userRecord = await auth.createUser({
+    uid: IDS.adminUser,
     email: adminEmail,
-    passwordHash: bcrypt.hashSync('password123', 10),
+    password: adminPassword,
+    displayName: '管理者',
+  });
+  await usersCol.doc(userRecord.uid).set({
+    email: adminEmail,
     name: '管理者',
     companyId: IDS.company,
   });
 
-  return { companyId: IDS.company, branchAId: IDS.branchA, branchBId: IDS.branchB, adminEmail };
+  return { companyId: IDS.company, branchAId: IDS.branchA, branchBId: IDS.branchB, adminEmail, adminPassword };
 }
 
 // CLIから直接実行された場合（`npm run seed`）のみ実行する。

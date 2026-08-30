@@ -1,5 +1,6 @@
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 
 // Firebase Admin SDKの認証情報。3つの環境変数（Vercel/ローカルの.env共通）から組み立てる。
 // FIREBASE_PRIVATE_KEY はJSON鍵ファイル内の値をそのまま1行の文字列として保存し（改行は \n のまま）、
@@ -21,6 +22,7 @@ if (!getApps().length) {
 }
 
 export const db = getFirestore();
+export const auth = getAuth();
 export { FieldValue };
 
 export const companiesCol = db.collection('companies');

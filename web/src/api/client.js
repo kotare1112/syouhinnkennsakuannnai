@@ -1,8 +1,10 @@
+import { firebaseAuth } from '../firebase.js';
+
 const BASE = '/api';
 
-function authHeaders() {
-  const token = localStorage.getItem('adminToken');
-  return token ? { Authorization: `Bearer ${token}` } : {};
+async function authHeaders() {
+  const idToken = await firebaseAuth.currentUser?.getIdToken();
+  return idToken ? { Authorization: `Bearer ${idToken}` } : {};
 }
 
 async function request(path, options = {}) {
@@ -10,18 +12,13 @@ async function request(path, options = {}) {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      ...authHeaders(),
+      ...(await authHeaders()),
       ...(options.headers || {}),
     },
   });
   const isJson = res.headers.get('content-type')?.includes('application/json');
   const body = isJson ? await res.json() : null;
   if (!res.ok) {
-    if (res.status === 401 && path.startsWith('/admin')) {
-      // トークンが無効／紐づく会社が存在しない場合、次回アクセス時にログイン画面へ戻すため破棄する。
-      localStorage.removeItem('adminToken');
-      localStorage.removeItem('adminUser');
-    }
     throw new Error(body?.error || `リクエストに失敗しました (${res.status})`);
   }
   return body;
@@ -43,11 +40,9 @@ export const api = {
     }),
   getRanking: (branchId) => request(`/branches/${branchId}/ranking`),
 
-  login: (email, password) =>
-    request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   register: (payload) =>
     request('/auth/register', { method: 'POST', body: JSON.stringify(payload) }),
-  logout: () => request('/auth/logout', { method: 'POST' }),
+  getMe: () => request('/auth/me'),
 
   adminGetBranches: () => request('/admin/branches'),
   adminCreateBranch: (name) =>
